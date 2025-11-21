@@ -8,17 +8,17 @@ CreateThread(function()
     if Config.Framework == 'qb' then
         coreType = 'qb'
         QBCore = exports['qb-core']:GetCoreObject()
-        if Config.Debug then print('[x-storage] Forced QB-Core') end
+        if Config.Debug then print('[x-storage] QB-Core') end
 
     elseif Config.Framework == 'qbx' then
         coreType = 'qbx'
-        if Config.Debug then print('[x-storage] Forced QBX Core') end
+        if Config.Debug then print('[x-storage] QBX Core') end
 
     elseif Config.Framework == 'esx' then
         coreType = 'esx'
         if GetResourceState('es_extended') == 'started' then
             ESX = exports['es_extended']:getSharedObject()
-            if Config.Debug then print('[x-storage] Forced ESX') end
+            if Config.Debug then print('[x-storage] ESX') end
         else
             print('[x-storage] ERROR: es_extended not started')
         end
@@ -201,3 +201,4 @@ CreateThread(function()
         Wait(86400000)
     end
 end)
+
