@@ -1,8 +1,8 @@
 # x-storage
 A simple storage rental system for FiveM.  
-Supports Framework **QBCore**, **QBX**, **ESX**.
-Supports Inventories **ox_inventory**, **qb-inventory**.
-Supports Target **ox_target**, and **qb-target**.
+- Supports Framework **QBCore**, **QBX**, **ESX**.
+- Supports Inventories **ox_inventory**, **qb-inventory**.
+- Supports Target **ox_target**, and **qb-target**.
 
 ## Features
 - Rent personal storage at configured locations  
