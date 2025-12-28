@@ -1,204 +1,220 @@
-local Config = Config
-
+local Config = ConfigStorage or Config
 local coreType = nil
 local QBCore = nil
-local ESX = nil
 
 CreateThread(function()
-    if Config.Framework == 'qb' then
-        coreType = 'qb'
-        QBCore = exports['qb-core']:GetCoreObject()
-        if Config.Debug then print('[x-storage] QB-Core') end
-
-    elseif Config.Framework == 'qbx' then
-        coreType = 'qbx'
-        if Config.Debug then print('[x-storage] QBX Core') end
-
-    elseif Config.Framework == 'esx' then
-        coreType = 'esx'
-        if GetResourceState('es_extended') == 'started' then
-            ESX = exports['es_extended']:getSharedObject()
-            if Config.Debug then print('[x-storage] ESX') end
-        else
-            print('[x-storage] ERROR: es_extended not started')
-        end
-
+    if GetResourceState("qbx_core") == "started" then
+        coreType = "qbx"
+        if Config.Debug then print("[x-storage] Using QBX Core") end
+    elseif GetResourceState("qb-core") == "started" then
+        coreType = "qbcore"
+        QBCore = exports["qb-core"]:GetCoreObject()
+        if Config.Debug then print("[x-storage] Using QB-Core") end
     else
-        if GetResourceState('qbx_core') == 'started' then
-            coreType = 'qbx'
-            if Config.Debug then print('[x-storage] Auto: QBX Core detected') end
-        elseif GetResourceState('qb-core') == 'started' then
-            coreType = 'qb'
-            QBCore = exports['qb-core']:GetCoreObject()
-            if Config.Debug then print('[x-storage] Auto: QB-Core detected') end
-        elseif GetResourceState('es_extended') == 'started' then
-            coreType = 'esx'
-            ESX = exports['es_extended']:getSharedObject()
-            if Config.Debug then print('[x-storage] Auto: ESX detected') end
-        else
-            print('[x-storage] ERROR: No framework detected')
-        end
+        print("[x-storage] ERROR: No core detected (qb-core / qbx_core)!")
     end
 end)
 
 local function GetPlayer(src)
-    if coreType == 'qb' and QBCore then
-        return QBCore.Functions.GetPlayer(src)
-    elseif coreType == 'qbx' then
+    if coreType == "qbx" then
         return exports.qbx_core:GetPlayer(src)
-    elseif coreType == 'esx' and ESX then
-        return ESX.GetPlayerFromId(src)
+    elseif coreType == "qbcore" and QBCore then
+        return QBCore.Functions.GetPlayer(src)
     end
     return nil
 end
 
 local function getCitizenId(src)
     local Player = GetPlayer(src)
-    if not Player then return nil end
+    if not Player or not Player.PlayerData then return nil end
 
-    if coreType == 'esx' then
-        local id = Player.getIdentifier and Player.getIdentifier() or Player.identifier
-        if not id and Config.Debug then print('[x-storage] ESX identifier missing for', src) end
-        return id
-    else
-        local pdata = Player.PlayerData
-        if not pdata then return nil end
+    local cid = Player.PlayerData.CitizenId
+        or Player.PlayerData.citizenid
+        or Player.PlayerData.citizenId
 
-        local cid = pdata.CitizenId or pdata.citizenid or pdata.citizenId
-        if not cid and Config.Debug then print('[x-storage] QB/QBX citizenid missing for', src) end
-        return cid
+    if Config.Debug and not cid then
+        print("[x-storage] WARNING: citizenid not found for src", src)
     end
+
+    return cid
 end
 
 local function Notify(src, msg, typ)
-    TriggerClientEvent('l_rentalstorage:notify', src, 'Storage Rental', msg, typ or 'inform')
+    TriggerClientEvent("l_rentalstorage:notify", src, "Storage Rental", msg, typ or "inform")
 end
 
 local function chargePlayer(src, amount)
     local Player = GetPlayer(src)
     if not Player then return false end
-
-    if coreType == 'esx' then
-        if Config.MoneyAccount == 'bank' then
-            local acc = Player.getAccount and Player.getAccount('bank')
-            local money = acc and acc.money or 0
-            if money >= amount then Player.removeAccountMoney('bank', amount) return true end
-            return false
-        else
-            local cash = Player.getMoney and Player.getMoney() or 0
-            if cash >= amount then Player.removeMoney(amount) return true end
-            return false
-        end
-    else
-        return Player.Functions.RemoveMoney(Config.MoneyAccount, amount, 'x-storage-rent')
-    end
+    return Player.Functions.RemoveMoney(Config.MoneyAccount, amount, "x-storage-rent")
 end
 
 local function buildStashId(cid, loc)
-    return ('xstorage_%s_loc%s'):format(cid, loc)
+    return ("xstorage_%s_loc%s"):format(cid, loc)
 end
 
+-- Stash Register (FIXED)
 local function registerStash(row)
-    if Config.Inventory ~= 'ox' then return end
     local loc = Config.Locations[row.location]
     if not loc then return end
 
+    -- L FIX:
+    -- Do NOT owner-scope the stash (last argument must be false / nil),
+    -- because stashid already contains citizenid+location.
     exports.ox_inventory:RegisterStash(
         row.stashid,
-        ('%s - %s'):format(loc.label, row.citizenid),
+        ("%s - %s"):format(loc.label, row.citizenid),
         loc.stashSlots,
         loc.stashWeight,
-        true
+        false
     )
 
     if Config.Debug then
-        print('[x-storage] Registered stash:', row.stashid)
+        print(("[x-storage] Registered stash %s for %s at location %s"):format(row.stashid, row.citizenid, row.location))
     end
 end
 
 CreateThread(function()
-    if Config.Inventory ~= 'ox' then return end
-    local rows = MySQL.query.await('SELECT * FROM rental_storage WHERE expire_at >= CURDATE()')
-    if not rows then return end
-    for _, row in ipairs(rows) do registerStash(row) end
+    local rows = MySQL.query.await("SELECT * FROM rental_storage WHERE expire_at >= CURDATE()")
+    if rows then
+        for _, row in ipairs(rows) do
+            registerStash(row)
+        end
+    end
 end)
 
-RegisterNetEvent('l_rentalstorage:tryAccess', function(locId)
+RegisterNetEvent("l_rentalstorage:tryAccess", function(locId)
     local src = source
     local cid = getCitizenId(src)
     if not cid then return end
 
+    local loc = Config.Locations[locId]
+    if not loc then
+        if Config.Debug then print("[x-storage] Invalid locationId in tryAccess:", locId) end
+        return
+    end
+
     local row = MySQL.single.await(
-        'SELECT * FROM rental_storage WHERE citizenid = ? AND location = ? AND expire_at >= CURDATE()',
+        "SELECT * FROM rental_storage WHERE citizenid = ? AND location = ? AND expire_at >= CURDATE()",
         { cid, locId }
     )
 
+    if Config.Debug then
+        if row then
+            print(("[x-storage] tryAccess: found active rental for %s at loc %s, expire_at=%s"):format(cid, locId, row.expire_at))
+        else
+            print(("[x-storage] tryAccess: no active rental for %s at loc %s"):format(cid, locId))
+        end
+    end
+
     if not row then
-        TriggerClientEvent('l_rentalstorage:startRental', src, locId)
+        TriggerClientEvent("l_rentalstorage:startRental", src, locId)
     else
-        TriggerClientEvent('l_rentalstorage:enterPassword', src, locId)
+        TriggerClientEvent("l_rentalstorage:enterPassword", src, locId)
     end
 end)
 
-RegisterNetEvent('l_rentalstorage:rentStorage', function(locId, durationKey, password)
+RegisterNetEvent("l_rentalstorage:rentStorage", function(locId, durationKey, password)
     local src = source
     local cid = getCitizenId(src)
     if not cid then return end
 
-    local cfg = Config.Durations[durationKey]
-    if not cfg then return Notify(src, 'Invalid rental option', 'error') end
-
-    if cfg.price > 0 and not chargePlayer(src, cfg.price) then
-        return Notify(src, 'Not enough money', 'error')
+    local loc = Config.Locations[locId]
+    if not loc then
+        if Config.Debug then print("[x-storage] rentStorage: invalid locId", locId) end
+        return
     end
 
-    local expireDate = os.date('%Y-%m-%d', os.time() + (cfg.days * 86400))
+    local cfg = Config.Durations[durationKey]
+    if not cfg then
+        Notify(src, "Invalid duration selected.", "error")
+        return
+    end
+
+    if cfg.price > 0 and not chargePlayer(src, cfg.price) then
+        Notify(src, "Not enough money.", "error")
+        return
+    end
+
+    local expireDate = os.date("%Y-%m-%d", os.time() + (cfg.days * 86400))
     local stashId = buildStashId(cid, locId)
 
     local existing = MySQL.single.await(
-        'SELECT id FROM rental_storage WHERE citizenid = ? AND location = ?',
+        "SELECT id FROM rental_storage WHERE citizenid = ? AND location = ?",
         { cid, locId }
     )
 
     if existing then
         MySQL.update.await(
-            'UPDATE rental_storage SET stashid=?, password=?, expire_at=? WHERE id=?',
+            "UPDATE rental_storage SET stashid = ?, password = ?, expire_at = ? WHERE id = ?",
             { stashId, password, expireDate, existing.id }
         )
     else
         MySQL.insert.await(
-            'INSERT INTO rental_storage (citizenid, location, stashid, password, expire_at) VALUES (?, ?, ?, ?, ?)',
+            "INSERT INTO rental_storage (citizenid, location, stashid, password, expire_at) VALUES (?, ?, ?, ?, ?)",
             { cid, locId, stashId, password, expireDate }
         )
     end
 
     registerStash({ citizenid = cid, location = locId, stashid = stashId })
-    Notify(src, 'Storage rented for ' .. cfg.label, 'success')
+    Notify(src, "Storage rented for " .. cfg.label, "success")
+
+    if Config.Debug then
+        print(("[x-storage] rentStorage: %s loc %s expire_at=%s stash=%s"):format(cid, locId, expireDate, stashId))
+    end
 end)
 
-RegisterNetEvent('l_rentalstorage:openStorage', function(locId, pass)
+RegisterNetEvent("l_rentalstorage:openStorage", function(locId, pass)
     local src = source
     local cid = getCitizenId(src)
     if not cid then return end
 
+    local loc = Config.Locations[locId]
+    if not loc then
+        if Config.Debug then print("[x-storage] openStorage: invalid locId", locId) end
+        return
+    end
+
     local row = MySQL.single.await(
-        'SELECT * FROM rental_storage WHERE citizenid = ? AND location = ? AND expire_at >= CURDATE()',
+        "SELECT * FROM rental_storage WHERE citizenid = ? AND location = ? AND expire_at >= CURDATE()",
         { cid, locId }
     )
 
-    if not row then return Notify(src, 'Rental expired or missing', 'error') end
-    if row.password ~= pass then return Notify(src, 'Incorrect password', 'error') end
+    if not row then
+        Notify(src, "Your storage rental has expired or does not exist.", "error")
+        if Config.Debug then
+            print(("[x-storage] openStorage: no active rental for %s at loc %s"):format(cid, locId))
+        end
+        return
+    end
 
+    if row.password ~= pass then
+        Notify(src, "Incorrect password.", "error")
+        if Config.Debug then
+            print(("[x-storage] openStorage: wrong password for %s at loc %s"):format(cid, locId))
+        end
+        return
+    end
+
+    -- ensure stash exists + registered
     registerStash(row)
-    TriggerClientEvent('l_rentalstorage:openStash', src, row.stashid, locId)
-end)
 
-CreateThread(function()
-    while true do
-        MySQL.update.await(
-            'DELETE FROM rental_storage WHERE expire_at < DATE_SUB(CURDATE(), INTERVAL 90 DAY)'
-        )
-        Wait(86400000)
+    -- open on client
+    TriggerClientEvent("l_rentalstorage:openStash", src, row.stashid)
+
+    if Config.Debug then
+        print(("[x-storage] openStorage: opened stash %s for %s at loc %s"):format(row.stashid, cid, locId))
     end
 end)
 
+-- Auto Cleanup(3 months after expiry)
+CreateThread(function()
+    local deleted = MySQL.update.await(
+        "DELETE FROM rental_storage WHERE expire_at < DATE_SUB(CURDATE(), INTERVAL 90 DAY)",
+        {}
+    )
+
+    if Config.Debug and deleted and deleted > 0 then
+        print("[x-storage] Cleanup: deleted " .. deleted .. " old rentals")
+    end
+end)
